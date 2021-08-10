@@ -1,0 +1,155 @@
+
+ProfinmanSearchTableCells::ProfinmanSearchTableCells(){
+	lookTable = 0;
+	indexCol = 0;
+	lookCol = 0;
+	outputName = 0;
+	maxRam = 500000000;
+	stdoutName[0] = '-'; stdoutName[1] = 0;
+	mySummary = "  Find a row in a tsv database by ID.";
+	myMainDoc = "Usage: profinman findtab [OPTION] [FILE]*\n"
+		"Find a row in a tsv database by ID.\n"
+		"Input files are tsv files containing IDs to search for.\n"
+		"The OPTIONS are:\n";
+	myVersionDoc = "ProFinMan findtab 1.0";
+	myCopyrightDoc = "Copyright (C) 2020 UNT HSC Center for Human Identification";
+	ArgumentParserStrMeta tabMeta("Search Table");
+		tabMeta.isFile = true;
+		tabMeta.fileExts.insert(".bctsv");
+		addStringOption("--tab", &lookTable, 0, "    Specify the table to search.\n    --tab File.bctsv\n", &tabMeta);
+	ArgumentParserIntMeta dcolMeta("Database ID Column");
+		addIntegerOption("--dcol", &indexCol, 0, "    The column in the database containing the ID.\n    The table should be sorted by this column.\n    --dcol 0\n", &dcolMeta);
+	ArgumentParserIntMeta lcolMeta("Search ID Column");
+		addIntegerOption("--lcol", &lookCol, 0, "    The column in the input containing the ID.\n    --lcol 0\n", &lcolMeta);
+	ArgumentParserIntMeta ramMeta("RAM Usage");
+		addIntegerOption("--ram", &maxRam, 0, "    Specify a target ram usage, in bytes.\n    --ram 500000000\n", &ramMeta);
+	ArgumentParserStrMeta outMeta("Result Location");
+		outMeta.isFile = true;
+		outMeta.fileWrite = true;
+		outMeta.fileExts.insert(".tsv");
+		addStringOption("--out", &outputName, 0, "    Where to write the output.\n    --out File.tsv\n", &outMeta);
+}
+
+ProfinmanSearchTableCells::~ProfinmanSearchTableCells(){}
+
+int ProfinmanSearchTableCells::handleUnknownArgument(int argc, char** argv, std::ostream* helpOut){
+	srcFAs.push_back(argv[0]);
+	return 1;
+}
+
+void ProfinmanSearchTableCells::printExtraGUIInformation(std::ostream* toPrint){
+	(*toPrint) << "STRINGVEC\t<|>\tNAME\tInput Files\tFILE\tREAD\t1\t.tsv" << std::endl;
+}
+
+int ProfinmanSearchTableCells::posteriorCheck(){
+	if((lookTable == 0) || (strlen(lookTable)==0)){
+		argumentError = "Need to specify the table database.";
+		return 1;
+	}
+	if(maxRam <= 0){
+		argumentError = "Will use at least one byte of ram.";
+		return 1;
+	}
+	if(lookCol < 0){
+		argumentError = "Column index must be non-negative.";
+		return 1;
+	}
+	if(indexCol < 0){
+		argumentError = "Column index must be non-negative.";
+		return 1;
+	}
+	if((outputName == 0) || (strlen(outputName)==0)){
+		outputName = 0;
+	}
+	if(srcFAs.size() == 0){
+		srcFAs.push_back(stdoutName);
+	}
+	return 0;
+}
+
+void ProfinmanSearchTableCells::runThing(){
+	OutStream* mainOutS = 0;
+	InStream* saveIS = 0;
+	TabularReader* saveTS = 0;
+	try{
+		//open the output
+			if((outputName == 0) || (strcmp(outputName,"-")==0)){
+				mainOutS = new ConsoleOutStream();
+			}
+			else{
+				mainOutS = new FileOutStream(0, outputName);
+			}
+			TSVTabularWriter mainOut(1, mainOutS);
+		//open the database
+			std::string baseFN(lookTable);
+			std::string blockFN = baseFN + ".blk";
+			std::string fastiFN = baseFN + ".tai";
+			GZipCompressionMethod compMeth;
+			BlockCompInStream blkComp(baseFN.c_str(), blockFN.c_str(), &compMeth);
+			BCompTabularReader gfaOut(&blkComp, fastiFN.c_str());
+		//open the input
+			for(uintptr_t ii = 0; ii<srcFAs.size(); ii++){
+				saveIS = new FileInStream(srcFAs[ii]);
+				saveTS = new TSVTabularReader(1, saveIS);
+				while(saveTS->readNextEntry()){
+					if(saveTS->numEntries <= (uintptr_t)lookCol){
+						mainOut.numEntries = 0;
+						mainOut.writeNextEntry();
+						continue;
+					}
+					uintptr_t curSize = saveTS->entrySizes[lookCol];
+					const char* curEntry = saveTS->curEntries[lookCol];
+					//do a lower bound through the database
+						uintptr_t lowRangeS = 0;
+						uintptr_t countL = gfaOut.getNumEntries();
+						while(countL){
+							uintptr_t step = countL / 2;
+							uintptr_t curTestI = lowRangeS + step;
+							gfaOut.readSpecificEntry(curTestI);
+							if(((uintptr_t)indexCol) >= gfaOut.numEntries){ throw std::runtime_error("ID column should be present in ALL entries."); }
+							uintptr_t compSLen = gfaOut.entrySizes[indexCol];
+							const char* compStr = gfaOut.curEntries[indexCol];
+							int comComp = memcmp(compStr, curEntry, std::min(curSize, compSLen));
+							bool isLess = (comComp < 0) || ((comComp == 0) && (compSLen < curSize));
+							//update the search bounds
+							if(isLess){
+								lowRangeS = curTestI + 1;
+								countL -= (step + 1);
+							}
+							else{
+								countL = step;
+							}
+						}
+					//make sure the current target is the thing
+						bool isValid = lowRangeS < gfaOut.getNumEntries();
+						if(isValid){
+							gfaOut.readSpecificEntry(lowRangeS);
+							uintptr_t compSLen = gfaOut.entrySizes[indexCol];
+							const char* compStr = gfaOut.curEntries[indexCol];
+							isValid = (curSize == compSLen) && (memcmp(compStr, curEntry, curSize)==0);
+						}
+					//make a report
+						if(isValid){
+							mainOut.numEntries = gfaOut.numEntries;
+							mainOut.entrySizes = gfaOut.entrySizes;
+							mainOut.curEntries = gfaOut.curEntries;
+						}
+						else{
+							mainOut.numEntries = 0;
+						}
+						mainOut.writeNextEntry();
+				}
+				if(saveTS){ delete(saveTS); saveTS = 0; }
+				if(saveIS){ delete(saveIS); saveIS = 0; }
+			}
+	}
+	catch(std::exception& err){
+		if(saveTS){ delete(saveTS); }
+		if(saveIS){ delete(saveIS); }
+		if(mainOutS){ delete(mainOutS); }
+		throw;
+	}
+	if(saveTS){ delete(saveTS); }
+	if(saveIS){ delete(saveIS); }
+	if(mainOutS){ delete(mainOutS); }
+}
