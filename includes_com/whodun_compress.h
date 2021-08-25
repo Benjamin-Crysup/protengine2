@@ -193,23 +193,20 @@ public:
 	FILE* mainF;
 	/**The annotation file. Quads of pre-comp address, post-comp address, pre-comp len, post-comp len.*/
 	FILE* annotF;
-	/**Uniforms to pass to the fill threads.*/
-	std::vector<MultithreadBlockCompInStreamUniform> threadUnis;
 	/**The number of read blocks.*/
 	uintptr_t numReadBlocks;
 	/**The threads to use for compression.*/
 	ThreadPool* compThreads;
-	/**The uniforms waiting to decompress.*/
-	std::deque<MultithreadBlockCompInStreamUniform*> nextUniDecomp;
-	/**The uniforms waiting to fill.*/
-	std::deque<MultithreadBlockCompInStreamUniform*> nextUniOut;
-	/**The very next uniform to get data from.*/
-	MultithreadBlockCompInStreamUniform* nextUniTmp;
-	/**
-	 * Get the next uniform to get data from.
-	 * @return The next useful uniform: null if nothing left.
-	 */
-	MultithreadBlockCompInStreamUniform* getOpenUniform();
+	/**A place to store stuff for each action.*/
+	std::vector<MultithreadBlockCompInStreamUniform> threadUnis;
+	/**Leftover bytes from the last read.*/
+	std::vector<char>* leftover;
+	/**The next leftover byte to report.*/
+	uintptr_t nextLeftover;
+	/**A vector for leftovers.*/
+	std::vector<char> leftoverA;
+	/**A vector for leftovers.*/
+	std::vector<char> leftoverB;
 };
 
 /**Out to gzip file.*/
